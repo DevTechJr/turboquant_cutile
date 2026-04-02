@@ -12,10 +12,17 @@ from scipy import integrate
 
 
 def _gaussian_pdf(x: float, sigma: float) -> float:
-    return (1.0 / (math.sqrt(2 * math.pi) * sigma)) * math.exp( -x * x / (2 * sigma * sigma) )
+    return (1.0 / (math.sqrt(2 * math.pi) * sigma)) * math.exp(
+        -x * x / (2 * sigma * sigma)
+    )
 
 
-def solve_lloyd_max( d: int, bits: int, max_iter: int = 200, tol: float = 1e-10, ) -> tuple[torch.Tensor, torch.Tensor]:
+def solve_lloyd_max(
+    d: int,
+    bits: int,
+    max_iter: int = 200,
+    tol: float = 1e-10,
+) -> tuple[torch.Tensor, torch.Tensor]:
     """
     Returns (centroids, boundaries) as sorted float32 tensors.
     centroids: (2^bits,)  boundaries: (2^bits - 1,)
@@ -28,7 +35,9 @@ def solve_lloyd_max( d: int, bits: int, max_iter: int = 200, tol: float = 1e-10,
     centroids = [lo + (hi - lo) * (i + 0.5) / n_levels for i in range(n_levels)]
 
     for _ in range(max_iter):
-        boundaries = [ (centroids[i] + centroids[i + 1]) / 2.0 for i in range(n_levels - 1) ]
+        boundaries = [
+            (centroids[i] + centroids[i + 1]) / 2.0 for i in range(n_levels - 1)
+        ]
         edges = [lo * 3] + boundaries + [hi * 3]
         new_centroids = []
         for i in range(n_levels):
@@ -40,8 +49,13 @@ def solve_lloyd_max( d: int, bits: int, max_iter: int = 200, tol: float = 1e-10,
             break
         centroids = new_centroids
 
-    boundaries = [ (centroids[i] + centroids[i + 1]) / 2.0 for i in range(n_levels - 1) ]
-    return ( torch.tensor(centroids, dtype=torch.float32), torch.tensor(boundaries, dtype=torch.float32), )
+    boundaries = [
+        (centroids[i] + centroids[i + 1]) / 2.0 for i in range(n_levels - 1)
+    ]
+    return (
+        torch.tensor(centroids, dtype=torch.float32),
+        torch.tensor(boundaries, dtype=torch.float32),
+    )
 
 
 class LloydMaxCodebook:
@@ -61,4 +75,7 @@ class LloydMaxCodebook:
         return self.centroids.to(indices.device)[indices.long()]
 
     def __repr__(self) -> str:
-        return ( f"LloydMaxCodebook(d={self.d}, bits={self.bits}, " f"levels={self.n_levels})" )
+        return (
+            f"LloydMaxCodebook(d={self.d}, bits={self.bits}, "
+            f"levels={self.n_levels})"
+        )

@@ -4,7 +4,13 @@ import math
 import torch
 
 from .codebook import LloydMaxCodebook
-from .constants import ( BLOCK_Q, BLOCK_S, DEFAULT_SEED, DEFAULT_TOTAL_BITS, HEAD_DIM, )
+from .constants import (
+    BLOCK_Q,
+    BLOCK_S,
+    DEFAULT_SEED,
+    DEFAULT_TOTAL_BITS,
+    HEAD_DIM,
+)
 
 
 def _generate_rotation_matrix(d: int, seed: int, device: str = "cpu") -> torch.Tensor:
@@ -28,7 +34,13 @@ def _generate_qjl_matrix(d: int, seed: int, device: str = "cpu") -> torch.Tensor
 class TurboQuantEngine:
     """Precomputed state (Pi, S, codebook) + kernel launch + PyTorch fallbacks."""
 
-    def __init__( self, head_dim: int = HEAD_DIM, total_bits: int = DEFAULT_TOTAL_BITS, seed: int = DEFAULT_SEED, device: str = "cpu", ):
+    def __init__(
+        self,
+        head_dim: int = HEAD_DIM,
+        total_bits: int = DEFAULT_TOTAL_BITS,
+        seed: int = DEFAULT_SEED,
+        device: str = "cpu",
+    ):
         self.head_dim = head_dim
         self.total_bits = total_bits
         self.mse_bits = max(total_bits - 1, 1)
@@ -102,7 +114,9 @@ class TurboQuantEngine:
         return reconstructed.half()
 
     @torch.no_grad()
-    def attention_scores_pytorch( self, Q: torch.Tensor, compressed_k: dict ) -> torch.Tensor:
+    def attention_scores_pytorch(
+        self, Q: torch.Tensor, compressed_k: dict
+    ) -> torch.Tensor:
         """Asymmetric estimator: term1 (MSE dot) + term2 (QJL correction)."""
         Q_f = Q.float()
         k_mse = compressed_k["k_mse"].float()
@@ -119,7 +133,12 @@ class TurboQuantEngine:
         return (term1 + term2) * self.scale
 
     @torch.no_grad()
-    def fused_attention_pytorch( self, Q: torch.Tensor, compressed_k: dict, compressed_v: dict, ) -> torch.Tensor:
+    def fused_attention_pytorch(
+        self,
+        Q: torch.Tensor,
+        compressed_k: dict,
+        compressed_v: dict,
+    ) -> torch.Tensor:
         """Full pipeline: scores -> softmax -> weighted V sum."""
         scores = self.attention_scores_pytorch(Q, compressed_k)
         weights = torch.softmax(scores, dim=-1)
@@ -151,9 +170,17 @@ class TurboQuantEngine:
         stream = torch.cuda.current_stream()
 
         if self.mse_bits == 2:
-            ct.launch(stream, grid, turboquant_compress_2bit, ( K, self.PiT.half(), self.Pi.half(), self.ST.half(), indices, signs, norms, r_norms, *centroids, *boundaries, seq_k, ))
+            ct.launch(stream, grid, turboquant_compress_2bit, (
+                K, self.PiT.half(), self.Pi.half(), self.ST.half(),
+                indices, signs, norms, r_norms,
+                *centroids, *boundaries, seq_k,
+            ))
         elif self.mse_bits == 3:
-            ct.launch(stream, grid, turboquant_compress_3bit, ( K, self.PiT.half(), self.Pi.half(), self.ST.half(), indices, signs, norms, r_norms, *centroids, *boundaries, seq_k, ))
+            ct.launch(stream, grid, turboquant_compress_3bit, (
+                K, self.PiT.half(), self.Pi.half(), self.ST.half(),
+                indices, signs, norms, r_norms,
+                *centroids, *boundaries, seq_k,
+            ))
         else:
             return self.compress_keys_pytorch(K)
 
@@ -167,7 +194,9 @@ class TurboQuantEngine:
             "residual_norms": r_norms,
         }
 
-    def _dequant_keys_from_indices( self, indices: torch.Tensor, norms: torch.Tensor ) -> torch.Tensor:
+    def _dequant_keys_from_indices(
+        self, indices: torch.Tensor, norms: torch.Tensor
+    ) -> torch.Tensor:
         """indices -> centroids -> un-rotate -> rescale."""
         centroids = self.key_codebook.centroids.to(indices.device)
         y_hat = centroids[indices.long()]
@@ -177,7 +206,10 @@ class TurboQuantEngine:
     @torch.no_grad()
     def launch_compress_values(self, V: torch.Tensor) -> dict:
         try:
-            from .compress import ( turboquant_compress_values_3bit, turboquant_compress_values_2bit, )
+            from .compress import (
+                turboquant_compress_values_3bit,
+                turboquant_compress_values_2bit,
+            )
             import cuda.tile as ct
         except ImportError:
             return self.compress_values_pytorch(V)
@@ -194,9 +226,17 @@ class TurboQuantEngine:
         stream = torch.cuda.current_stream()
 
         if self.total_bits == 3:
-            ct.launch(stream, grid, turboquant_compress_values_3bit, ( V, self.PiT.half(), indices, norms, *centroids, *boundaries, seq_v, ))
+            ct.launch(stream, grid, turboquant_compress_values_3bit, (
+                V, self.PiT.half(),
+                indices, norms,
+                *centroids, *boundaries, seq_v,
+            ))
         elif self.total_bits == 2:
-            ct.launch(stream, grid, turboquant_compress_values_2bit, ( V, self.PiT.half(), indices, norms, *centroids, *boundaries, seq_v, ))
+            ct.launch(stream, grid, turboquant_compress_values_2bit, (
+                V, self.PiT.half(),
+                indices, norms,
+                *centroids, *boundaries, seq_v,
+            ))
         else:
             return self.compress_values_pytorch(V)
 
@@ -223,16 +263,24 @@ class TurboQuantEngine:
         stream = torch.cuda.current_stream()
 
         if self.total_bits == 3:
-            ct.launch(stream, grid, turboquant_decompress_3bit, ( indices, norms, self.Pi.half(), output, *centroids, seq_v, ))
+            ct.launch(stream, grid, turboquant_decompress_3bit, (
+                indices, norms, self.Pi.half(), output,
+                *centroids, seq_v,
+            ))
         elif self.total_bits == 2:
-            ct.launch(stream, grid, turboquant_decompress_2bit, ( indices, norms, self.Pi.half(), output, *centroids, seq_v, ))
+            ct.launch(stream, grid, turboquant_decompress_2bit, (
+                indices, norms, self.Pi.half(), output,
+                *centroids, seq_v,
+            ))
         else:
             return self.decompress_values_pytorch(compressed_v)
 
         return output
 
     @torch.no_grad()
-    def launch_attention_scores( self, Q: torch.Tensor, compressed_k: dict, use_swizzle: bool = False ) -> torch.Tensor:
+    def launch_attention_scores(
+        self, Q: torch.Tensor, compressed_k: dict, use_swizzle: bool = False
+    ) -> torch.Tensor:
         try:
             from .attention import turboquant_attention_scores
             import cuda.tile as ct
@@ -246,13 +294,28 @@ class TurboQuantEngine:
         output = torch.empty(seq_q, seq_k, dtype=torch.float32, device=Q.device)
 
         grid = (self._cdiv(seq_q, BLOCK_Q), 1, 1)
-        ct.launch(torch.cuda.current_stream(), grid, turboquant_attention_scores, ( Q, compressed_k["k_mse"], compressed_k["qjl_signs"], compressed_k["residual_norms"], Q_proj, output, self.scale, self.correction_scale, seq_k, use_swizzle, ))
+        ct.launch(torch.cuda.current_stream(), grid, turboquant_attention_scores, (
+            Q, compressed_k["k_mse"], compressed_k["qjl_signs"],
+            compressed_k["residual_norms"], Q_proj, output,
+            self.scale, self.correction_scale, seq_k,
+            use_swizzle,
+        ))
         return output
 
     @torch.no_grad()
-    def launch_fused_attention( self, Q: torch.Tensor, compressed_k: dict, compressed_v: dict, use_swizzle: bool = False, ) -> torch.Tensor:
+    def launch_fused_attention(
+        self,
+        Q: torch.Tensor,
+        compressed_k: dict,
+        compressed_v: dict,
+        use_swizzle: bool = False,
+    ) -> torch.Tensor:
         try:
-            from .attention import ( turboquant_fused_attention, turboquant_fused_attention_vfused_3bit, turboquant_fused_attention_vfused_2bit, )
+            from .attention import (
+                turboquant_fused_attention,
+                turboquant_fused_attention_vfused_3bit,
+                turboquant_fused_attention_vfused_2bit,
+            )
             import cuda.tile as ct
         except ImportError:
             return self.fused_attention_pytorch(Q, compressed_k, compressed_v)
@@ -268,12 +331,31 @@ class TurboQuantEngine:
         val_centroids = self.val_codebook.centroids.tolist()
 
         if self.total_bits == 3:
-            ct.launch(stream, grid, turboquant_fused_attention_vfused_3bit, ( Q, compressed_k["k_mse"], compressed_k["qjl_signs"], compressed_k["residual_norms"], Q_proj, compressed_v["indices"], compressed_v["vec_norms"], self.Pi.half(), output, self.scale, self.correction_scale, seq_k, *val_centroids, use_swizzle, ))
+            ct.launch(stream, grid, turboquant_fused_attention_vfused_3bit, (
+                Q, compressed_k["k_mse"], compressed_k["qjl_signs"],
+                compressed_k["residual_norms"], Q_proj,
+                compressed_v["indices"], compressed_v["vec_norms"],
+                self.Pi.half(), output,
+                self.scale, self.correction_scale, seq_k,
+                *val_centroids, use_swizzle,
+            ))
         elif self.total_bits == 2:
-            ct.launch(stream, grid, turboquant_fused_attention_vfused_2bit, ( Q, compressed_k["k_mse"], compressed_k["qjl_signs"], compressed_k["residual_norms"], Q_proj, compressed_v["indices"], compressed_v["vec_norms"], self.Pi.half(), output, self.scale, self.correction_scale, seq_k, *val_centroids, use_swizzle, ))
+            ct.launch(stream, grid, turboquant_fused_attention_vfused_2bit, (
+                Q, compressed_k["k_mse"], compressed_k["qjl_signs"],
+                compressed_k["residual_norms"], Q_proj,
+                compressed_v["indices"], compressed_v["vec_norms"],
+                self.Pi.half(), output,
+                self.scale, self.correction_scale, seq_k,
+                *val_centroids, use_swizzle,
+            ))
         else:
             V_recon = self.launch_decompress_values(compressed_v)
-            ct.launch(stream, grid, turboquant_fused_attention, ( Q, compressed_k["k_mse"], compressed_k["qjl_signs"], compressed_k["residual_norms"], Q_proj, V_recon, output, self.scale, self.correction_scale, seq_k, use_swizzle, ))
+            ct.launch(stream, grid, turboquant_fused_attention, (
+                Q, compressed_k["k_mse"], compressed_k["qjl_signs"],
+                compressed_k["residual_norms"], Q_proj, V_recon, output,
+                self.scale, self.correction_scale, seq_k,
+                use_swizzle,
+            ))
 
         return output.half()
 
