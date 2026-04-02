@@ -564,9 +564,46 @@ footer {
   .stats-row { gap: 24px; }
   .stat .number { font-size: 1.6rem; }
   .img-row { grid-template-columns: 1fr; }
-  nav .nav-links { gap: 16px; }
-  nav .nav-links a { font-size: 12.5px; }
-  .pipeline { gap: 10px; }
-  .pipeline .step { min-width: 110px; padding: 12px 16px; }
-  .kernel-grid { grid-template-columns: 1fr 1fr; }
+  
+  nav {
+    height: auto;
+    padding: 12px 20px;
+  }
+  nav .nav-inner {
+    flex-direction: column;
+    gap: 12px;
+  }
+  main {
+    padding-top: 130px;
+  }
+  
+  nav .nav-links {
+    gap: 20px;
+    width: 100%;
+    justify-content: center;
+    flex-wrap: wrap;
+  }
+  nav .nav-links a { font-size: 13px; }
+  
+  .pipeline { 
+    flex-direction: column;
+    gap: 12px; 
+  }
+  .pipeline .step { 
+    width: 100%;
+    max-width: 260px;
+    padding: 16px; 
+  }
+  .pipeline .arrow {
+    transform: rotate(90deg);
+  }
+  
+  .kernel-grid { grid-template-columns: 1fr; }
+  
+  table {
+    display: block;
+    overflow-x: auto;
+    white-space: nowrap;
+    -webkit-overflow-scrolling: touch;
+  }
 }
