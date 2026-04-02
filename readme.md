@@ -9,7 +9,7 @@ random rotation, Lloyd-Max scalar quantization, and QJL bias correction. 3 bits 
 Tested end-to-end on Qwen 2.5-1.5B running on a B200.
 
 **[Blog / Write-up →]()**
-**[Video Walkthrough →]()**
+**[Video Walkthrough →](https://youtu.be/HBXEUXgcrfM)**
 
 ![generation](screenshots/generation_complete.png)
 
