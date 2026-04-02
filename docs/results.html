@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Results — TurboQuant on Blackwell</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<nav>
+  <div class="nav-inner">
+    <a href="index.html" class="logo">TURBOQUANT cuTILE</a>
+    <ul class="nav-links">
+      <li><a href="index.html">Home</a></li>
+      <li><a href="algorithm.html">Algorithm</a></li>
+      <li><a href="kernels.html">Kernels</a></li>
+      <li><a href="results.html" class="active">Results</a></li>
+    </ul>
+  </div>
+</nav>
+
+<main>
+
+  <h1>Chapter 3: Results &amp; Benchmarks</h1>
+  <p style="color:var(--text-muted); margin-bottom: 40px;">
+    All numbers from Qwen 2.5-1.5B running on a single NVIDIA Blackwell B200.
+  </p>
+
+  <!-- ── Headline Numbers ─────────────────────────── -->
+  <section>
+    <h2>At a Glance</h2>
+
+    <div class="stats-row">
+      <div class="stat">
+        <div class="number">5.02&times;</div>
+        <div class="label">Compression Ratio</div>
+      </div>
+      <div class="stat">
+        <div class="number">~0.985</div>
+        <div class="label">Cosine Similarity</div>
+      </div>
+      <div class="stat">
+        <div class="number">144.7</div>
+        <div class="label">tok/s</div>
+      </div>
+      <div class="stat">
+        <div class="number">3 bits</div>
+        <div class="label">Per Coordinate</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── Compression ──────────────────────────────── -->
+  <section>
+    <h2>Compression</h2>
+    <p>
+      At 3 bits per coordinate for both keys and values, the KV cache compresses from
+      <strong>1,288 KB down to 257 KB</strong>, a 5.02&times; reduction. This holds
+      across all layers and heads.
+    </p>
+
+    <div class="img-row" style="align-items: start;">
+      <figure>
+        <img src="screenshots/compression_summary.png" alt="Compression summary" style="width:100%; object-fit:contain; object-position:top;">
+        <figcaption>Per-component byte breakdown</figcaption>
+      </figure>
+      <figure>
+        <img src="screenshots/compression_ratio_bar.png" alt="Compression ratio bar chart" style="width:100%; object-fit:contain; object-position:top;">
+        <figcaption>FP16 vs TurboQuant memory usage</figcaption>
+      </figure>
+    </div>
+
+    <figure>
+      <img src="screenshots/compression_ratios.png" alt="Detailed compression ratios" style="max-width:600px;">
+      <figcaption>Compression ratios across different configurations</figcaption>
+    </figure>
+  </section>
+
+  <!-- ── Attention Quality ────────────────────────── -->
+  <section>
+    <h2>Attention Quality</h2>
+    <p>
+      The fused attention kernel was tested against FP16 reference attention across 5 sampled layers,
+      all KV heads, and 8 query probes per head (mix of random vectors and actual key vectors).
+    </p>
+
+    <figure>
+      <img src="screenshots/attention_quality_stats.png" alt="Attention quality statistics">
+      <figcaption>
+        ~0.985 output cosine similarity on layers 7–27.
+        Tested across 80 queries (5 layers &times; 2 heads &times; 8 probes).
+      </figcaption>
+    </figure>
+
+    <figure>
+      <img src="screenshots/attention_quality_histograms.png" alt="Quality distribution histograms">
+      <figcaption>Distribution of cosine similarity and max absolute weight error across all probes.</figcaption>
+    </figure>
+
+    <div class="callout">
+      <strong>Interpretation:</strong> On layers 7 through 27, compressed attention output is virtually indistinguishable
+      from FP16. The QJL correction term is doing its job. Attention scores come out unbiased.
+    </div>
+  </section>
+
+  <!-- ── Latency ──────────────────────────────────── -->
+  <section>
+    <h2>Latency Benchmarks</h2>
+    <p>
+      Latency measured on B200 across sequence lengths from 512 to 16K tokens.
+      The fused kernel does score computation, QJL correction, online softmax,
+      and V accumulation in one pass.
+    </p>
+
+    <figure>
+      <img src="screenshots/latency_table_cropped.png" alt="Latency benchmark table">
+      <figcaption>FP16 matmul vs fused TurboQuant vs fused + block swizzle</figcaption>
+    </figure>
+
+    <figure>
+      <img src="screenshots/latency_benchmark.png" alt="Latency benchmark chart">
+      <figcaption>The fused kernel approaches FP16 matmul speed and beats it at long sequences.</figcaption>
+    </figure>
+  </section>
+
+  <!-- ── Roofline ─────────────────────────────────── -->
+  <section>
+    <h2>Roofline Analysis</h2>
+    <p>
+      Both standard FP16 attention and TurboQuant's current implementation sit in the
+      <strong>memory-bound regime</strong> with arithmetic intensity around 1 FLOP/byte.
+      The fully-fused target changes this. Load only compressed data, reconstruct entirely
+      on-chip, and arithmetic intensity jumps past 600. That crosses into
+      <strong>compute-bound territory</strong>.
+    </p>
+
+    <figure>
+      <img src="screenshots/roofline_full.png" alt="Roofline analysis" style="max-width: 650px;">
+      <figcaption>
+        B200 roofline model. The green triangle is the fully-fused target:
+        arithmetic intensity high enough that compute becomes the bottleneck, not memory.
+      </figcaption>
+    </figure>
+  </section>
+
+  <!-- ── Memory Scaling ───────────────────────────── -->
+  <section>
+    <h2>Memory Scaling</h2>
+    <p>
+      KV cache memory scales linearly with sequence length. TurboQuant's compressed representation
+      stays roughly 5&times; smaller at every point on the curve.
+    </p>
+
+    <div class="img-row">
+      <figure>
+        <img src="screenshots/kv_cache_memory_scaling.png" alt="Memory scaling chart">
+        <figcaption>FP16 vs TurboQuant cache size</figcaption>
+      </figure>
+      <figure>
+        <img src="screenshots/memory_scaling_table.png" alt="Memory scaling table">
+        <figcaption>Numerical breakdown by sequence length</figcaption>
+      </figure>
+    </div>
+
+    <figure>
+      <img src="screenshots/memory_breakdown_charts.png" alt="Memory breakdown">
+      <figcaption>Per-component memory breakdown</figcaption>
+    </figure>
+  </section>
+
+  <!-- ── Live Generation ──────────────────────────── -->
+  <section>
+    <h2>Live Generation</h2>
+    <p>
+      Qwen 2.5-1.5B generating text with its value cache replaced by TurboQuant's 3-bit
+      compressed version. The model produces coherent, on-topic text at <strong>144.7 tok/s</strong>.
+    </p>
+
+    <figure>
+      <img src="screenshots/generation_complete.png" alt="Generation from compressed cache">
+      <figcaption>60 tokens generated in 0.41s from compressed memory. 1,288 KB &rarr; 257 KB.</figcaption>
+    </figure>
+
+    <figure>
+      <img src="screenshots/side_by_side_text.png" alt="Side by side text comparison">
+      <figcaption>Standard FP16 vs decompressed-value generation. Outputs are nearly identical.</figcaption>
+    </figure>
+  </section>
+
+  <!-- ── Needle in a Haystack ─────────────────────── -->
+  <section>
+    <h2>Additional Tests</h2>
+
+    <div class="img-row">
+      <figure>
+        <img src="screenshots/needle_results_cropped.png" alt="Needle in a haystack">
+        <figcaption>Needle-in-a-haystack attention retrieval</figcaption>
+      </figure>
+      <figure>
+        <img src="screenshots/long_context_stress_test.png" alt="Long context stress test">
+        <figcaption>Long-context stress test</figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <!-- ── Notebook ─────────────────────────────────── -->
+  <section>
+    <h2>Full Notebook</h2>
+    <p>
+      Every number on this page comes from <code>turboquant_b200_patch1.ipynb</code>,
+      a Jupyter notebook that runs end-to-end on the B200. It covers model loading,
+      KV cache extraction, compression, quality analysis, latency benchmarks,
+      memory scaling, roofline analysis, and live text generation.
+    </p>
+
+    <figure>
+      <img src="screenshots/notebook_header_b200.png" alt="Notebook header" style="max-width: 600px;">
+      <figcaption>The notebook running on B200 with Qwen 2.5-1.5B</figcaption>
+    </figure>
+  </section>
+
+  <!-- ── Next Steps ─────────────────────────────────── -->
+  <section>
+    <h2>Next Steps</h2>
+
+    <div class="card accent-green">
+      <h4>Full Autoregressive Generation</h4>
+      <p>
+        These quality numbers are per-layer. Stacking 28 layers of approximate attention
+        is a different challenge since small errors compound. Next milestone: full end-to-end
+        generation with compressed keys and QJL correction at every layer.
+      </p>
+    </div>
+
+    <div class="card accent-blue">
+      <h4>Hitting the Fully-Fused Roofline Target</h4>
+      <p>
+        The kernel currently sits in the memory-bound regime. The fully-fused target pushes
+        arithmetic intensity past 600 into compute-bound territory. V-fused decompression
+        was the first step. Tighter shared memory scheduling and less HBM traffic get us the rest of the way.
+      </p>
+    </div>
+
+    <div class="card accent-purple">
+      <h4>Larger Models and MoE</h4>
+      <p>
+        Qwen 2.5-1.5B was the proving ground. The real payoff is on larger models where KV cache
+        dominates memory. MoE architectures already stress memory budgets with expert weights,
+        so 5x cache compression would free significant capacity for longer contexts or higher batch sizes.
+      </p>
+    </div>
+  </section>
+
+  <!-- ── Chapter Nav ──────────────────────────────── -->
+  <div class="chapter-nav">
+    <a href="kernels.html">&larr; Chapter 2: Kernels</a>
+    <a href="index.html">Home &rarr;</a>
+  </div>
+
+  <section>
+    <div class="author-card">
+      <img src="screenshots/anirudh.jpeg" alt="Anirudh Bharadwaj Vangara" style="width:56px; height:56px; border-radius:50%; object-fit:cover; flex-shrink:0;">
+      <div class="info">
+        <div class="name">Anirudh Bharadwaj Vangara</div>
+        <div class="meta">MLE Intern @ Shopify &middot; Computer Engineering @ University of Waterloo &middot; MLH Top 50</div>
+        <div style="margin-top:4px;">
+          <a class="email" href="mailto:ab2vanga@uwaterloo.ca">ab2vanga@uwaterloo.ca</a>
+          &middot;
+          <a href="http://linkedin.com/in/anirudhbvangara" target="_blank" style="font-size:0.82rem; color:var(--blue);">LinkedIn</a>
+          &middot;
+          <a href="https://x.com/anirudhbv_ce" target="_blank" style="font-size:0.82rem; color:var(--blue);">X / Twitter</a>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    TurboQuant on Blackwell &middot; Built with cuTile on NVIDIA B200 &middot;
+    Based on <a href="https://arxiv.org/abs/2504.19874">TurboQuant (ICLR 2026)</a>
+  </footer>
+
+</main>
+
+</body>
+</html>

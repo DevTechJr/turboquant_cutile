@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Kernel Architecture — TurboQuant on Blackwell</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<nav>
+  <div class="nav-inner">
+    <a href="index.html" class="logo">TURBOQUANT cuTILE</a>
+    <ul class="nav-links">
+      <li><a href="index.html">Home</a></li>
+      <li><a href="algorithm.html">Algorithm</a></li>
+      <li><a href="kernels.html" class="active">Kernels</a></li>
+      <li><a href="results.html">Results</a></li>
+    </ul>
+  </div>
+</nav>
+
+<main>
+
+  <h1>Chapter 2: Kernel Architecture</h1>
+  <p style="color:var(--text-muted); margin-bottom: 40px;">
+    Five cuTile kernel types, fused attention with on-chip decompression, and Blackwell-specific optimizations.
+  </p>
+
+  <!-- ── Kernel Overview ──────────────────────────── -->
+  <section>
+    <h2>The Five Kernel Types</h2>
+    <p>
+      The engine is built from five kernel types that cover the full compression-and-attention pipeline.
+      Each has 2-bit and 3-bit variants (matching the key and value bit budgets), bringing the total
+      to around 10 individual kernels. All are written in
+      <a href="https://developer.nvidia.com/cuda-tile" target="_blank">NVIDIA cuTile</a>,
+      a Python DSL that compiles to optimized GPU code targeting Tensor Cores and TMA.
+    </p>
+
+    <div class="kernel-grid">
+      <div class="kernel-chip">
+        <div class="chip-name">Key Compression</div>
+        <div class="chip-desc">Rotate &rarr; Lloyd-Max quantize &rarr; store QJL signs</div>
+      </div>
+      <div class="kernel-chip">
+        <div class="chip-name">Value Compression</div>
+        <div class="chip-desc">Rotate &rarr; Lloyd-Max quantize (3-bit, 8 centroids)</div>
+      </div>
+      <div class="kernel-chip">
+        <div class="chip-name">Value Decompression</div>
+        <div class="chip-desc">Centroid lookup &rarr; un-rotate via &Pi;<sup>T</sup></div>
+      </div>
+      <div class="kernel-chip">
+        <div class="chip-name">Attention Scoring</div>
+        <div class="chip-desc">MSE dot product + QJL correction term</div>
+      </div>
+      <div class="kernel-chip highlight">
+        <div class="chip-name">&#9733; Fused Attention</div>
+        <div class="chip-desc">Score + softmax + V accumulation in one pass</div>
+      </div>
+    </div>
+
+    <figure>
+      <video autoplay loop muted playsinline width="100%">
+        <source src="videos/A04b_KernelOverview.mp4" type="video/mp4">
+      </video>
+      <figcaption>Five kernel types covering the full TurboQuant pipeline.</figcaption>
+    </figure>
+  </section>
+
+  <!-- ── Fused Attention Deep Dive ────────────────── -->
+  <section>
+    <h2>Fused Attention Kernel</h2>
+    <p>
+      The fused attention kernel is where things get interesting. It performs scoring, bias correction,
+      softmax, and the weighted value accumulation in a <strong>single GPU kernel</strong> with
+      no intermediate writes to global memory.
+    </p>
+
+    <h3>How it works</h3>
+    <p>
+      Each thread block owns a single <strong>query tile</strong>. It loads Q once into on-chip memory
+      and then streams through every KV block in sequence:
+    </p>
+
+    <div class="card accent-blue">
+      <h4>Per KV Block</h4>
+      <ol style="padding-left: 18px; line-height: 2; font-size: 0.92rem;">
+        <li><code>ct.mma(Q, K_mse<sup>T</sup>)</code>: bulk attention score against MSE-compressed keys</li>
+        <li><code>ct.mma(Q_proj, Signs<sup>T</sup>)</code>: QJL correction inner product</li>
+        <li>Combine: <code>score = term1 + ||r|| &middot; correction_scale &middot; term2</code></li>
+        <li>Online softmax update (running max + sum of exponentials)</li>
+        <li><code>ct.mma(P, V)</code>: weighted value accumulation</li>
+      </ol>
+    </div>
+
+    <p>
+      TMA pulls compressed data into shared memory, it flows through TMEM to the Tensor Cores
+      in a single hop (a Blackwell-specific path), and at the end you have your output.
+      One kernel, one pass, no round-trips to HBM.
+    </p>
+
+    <figure>
+      <video autoplay loop muted playsinline width="100%">
+        <source src="videos/A05_FusedAttention.mp4" type="video/mp4">
+      </video>
+      <figcaption>Fused attention: Q tile stays fixed, KV blocks stream through, output accumulates.</figcaption>
+    </figure>
+
+    <h3>Kernel signature</h3>
+    <div class="code-header">turboquant_cutile/attention.py</div>
+    <pre><code><span class="decorator">@ct.kernel</span>(<span class="str">occupancy</span>=<span class="num">2</span>)
+<span class="kw">def</span> <span class="fn">turboquant_fused_attention_vfused_3bit</span>(
+    Q, K_mse, Signs, R_norms, Q_proj,
+    V_Indices, V_Norms, Pi, Output,
+    scale: <span class="type">float</span>,
+    correction_scale: <span class="type">float</span>,
+    seq_k: <span class="type">int</span>,
+    <span class="comment"># ...8 centroid values unpacked as constants...</span>
+    USE_SWIZZLE: ConstBool,
+):
+    q_block = ct.bid(<span class="num">0</span>)
+    <span class="comment"># Load Q tile once</span>
+    q_tile = ct.load(Q, index=(q_block, <span class="num">0</span>), shape=(BLOCK_Q, HEAD_DIM))
+
+    <span class="comment"># Load rotation matrix Pi into shared memory (resident)</span>
+    pi_tile = ct.load(Pi, index=(<span class="num">0</span>, <span class="num">0</span>), shape=(HEAD_DIM, HEAD_DIM))
+
+    <span class="kw">for</span> kv_block <span class="kw">in</span> <span class="fn">range</span>(num_kv_blocks):
+        <span class="comment"># Score: Q @ K_mse^T</span>
+        k_tile = ct.load(K_mse, index=(kv_block, <span class="num">0</span>), ...)
+        term1 = ct.mma(q_tile, k_tile, transpose_b=<span class="num">True</span>)
+
+        <span class="comment"># QJL correction: Q_proj @ Signs^T</span>
+        s_tile = ct.load(Signs, index=(kv_block, <span class="num">0</span>), ...)
+        term2 = ct.mma(qp_tile, s_tile, transpose_b=<span class="num">True</span>)
+
+        <span class="comment"># Combine + online softmax</span>
+        scores = term1 * scale + norms * correction_scale * term2
+        m_new = ct.max(m_prev, ct.max(scores))
+        p_tile = ct.exp2((scores - m_new) * INV_LOG_2)
+        acc = acc * ct.exp2((m_prev - m_new) * INV_LOG_2) + ct.mma(p_tile, v_tile)
+        ...</code></pre>
+  </section>
+
+  <!-- ── V-Fusion ─────────────────────────────────── -->
+  <section>
+    <h2>V-Fused Decompression</h2>
+    <p>
+      Rather than decompressing values in a separate kernel (writing FP16 to HBM, then reading it back),
+      the fused attention kernel decompresses values <strong>on-chip</strong> inside the KV block loop.
+    </p>
+    <p>
+      The rotation matrix &Pi; (128&times;128, 32 KB in FP16) stays resident in shared memory across
+      all KV blocks. For each block, the kernel loads raw <code>uint8</code> indices and <code>FP16</code>
+      norms, does the centroid lookup, un-rotates via <code>ct.mma</code> with &Pi;, scales by norms,
+      and feeds the result straight into the <code>P &times; V</code> accumulation.
+    </p>
+
+    <div class="callout">
+      <strong>Result:</strong> One fewer kernel launch, one fewer HBM round-trip.
+      For a 2048-token sequence, that eliminates 512 KB of unnecessary memory traffic per head.
+    </div>
+  </section>
+
+  <!-- ── Optimizations ────────────────────────────── -->
+  <section>
+    <h2>Blackwell-Specific Optimizations</h2>
+
+    <div class="card-grid">
+      <div class="card accent-green">
+        <h4>Block Swizzling</h4>
+        <p>
+          Thread block IDs are interleaved with a stride of 4 to distribute L2 cache pressure.
+          Adjacent blocks hit different cache lines instead of thrashing the same partition.
+          At 16K tokens, swizzle cuts fused attention latency from 954 &mu;s to 899 &mu;s.
+        </p>
+      </div>
+      <div class="card accent-blue">
+        <h4>Pipelined TMA Loads</h4>
+        <p>
+          <code>latency=2</code> hints tell the hardware to prefetch the next KV block while
+          the current one is being processed. Overlaps memory transfer with Tensor Core compute.
+        </p>
+      </div>
+      <div class="card accent-purple">
+        <h4>exp2 with Flush-to-Zero</h4>
+        <p>
+          <code>ct.exp2(flush_to_zero=True)</code> uses Blackwell's native base-2 exponential
+          fast path. Softmax is reformulated in base-2 to take advantage.
+        </p>
+      </div>
+      <div class="card accent-green">
+        <h4>Approximate Division</h4>
+        <p>
+          <code>rounding_mode=RMd.APPROX</code> trades a tiny precision delta for faster
+          reciprocal operations in the softmax normalization.
+        </p>
+      </div>
+      <div class="card accent-blue">
+        <h4>Occupancy Tuning</h4>
+        <p>
+          <code>@ct.kernel(occupancy=2)</code> targets 2 concurrent thread blocks per SM,
+          balancing register pressure against parallelism for latency hiding.
+        </p>
+      </div>
+      <div class="card accent-purple">
+        <h4>Online Softmax</h4>
+        <p>
+          Running max and exponential sum are maintained across KV blocks.
+          No separate softmax pass needed. Numerically stable by construction.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── cuTile ───────────────────────────────────── -->
+  <section>
+    <h2>Why cuTile?</h2>
+    <p>
+      cuTile is NVIDIA's Python DSL for tile-level GPU programming. The compiler handles
+      Tensor Core scheduling, TMA dispatch, register allocation, and shared memory layout.
+      You write Python. It compiles to optimized GPU code. No raw CUDA, no manual pointer arithmetic.
+    </p>
+    <p>
+      This is particularly powerful on Blackwell, where the TMEM &rarr; Tensor Core path
+      and hardware TMA are first-class features that cuTile exposes directly.
+    </p>
+  </section>
+
+  <!-- ── Chapter Nav ──────────────────────────────── -->
+  <div class="chapter-nav">
+    <a href="algorithm.html">&larr; Chapter 1: Algorithm</a>
+    <a href="results.html">Chapter 3: Results &rarr;</a>
+  </div>
+
+  <section>
+    <div class="author-card">
+      <img src="screenshots/anirudh.jpeg" alt="Anirudh Bharadwaj Vangara" style="width:56px; height:56px; border-radius:50%; object-fit:cover; flex-shrink:0;">
+      <div class="info">
+        <div class="name">Anirudh Bharadwaj Vangara</div>
+        <div class="meta">MLE Intern @ Shopify &middot; Computer Engineering @ University of Waterloo &middot; MLH Top 50</div>
+        <div style="margin-top:4px;">
+          <a class="email" href="mailto:ab2vanga@uwaterloo.ca">ab2vanga@uwaterloo.ca</a>
+          &middot;
+          <a href="http://linkedin.com/in/anirudhbvangara" target="_blank" style="font-size:0.82rem; color:var(--blue);">LinkedIn</a>
+          &middot;
+          <a href="https://x.com/anirudhbv_ce" target="_blank" style="font-size:0.82rem; color:var(--blue);">X / Twitter</a>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    TurboQuant on Blackwell &middot; Built with cuTile on NVIDIA B200 &middot;
+    Based on <a href="https://arxiv.org/abs/2504.19874">TurboQuant (ICLR 2026)</a>
+  </footer>
+
+</main>
+
+</body>
+</html>

@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TurboQuant on Blackwell — KV Cache Compression Engine</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<nav>
+  <div class="nav-inner">
+    <a href="index.html" class="logo">TURBOQUANT cuTILE</a>
+    <ul class="nav-links">
+      <li><a href="index.html" class="active">Home</a></li>
+      <li><a href="algorithm.html">Algorithm</a></li>
+      <li><a href="kernels.html">Kernels</a></li>
+      <li><a href="results.html">Results</a></li>
+    </ul>
+  </div>
+</nav>
+
+<main>
+
+  <!-- ── Hero ─────────────────────────────────────── -->
+  <section class="hero">
+    <p class="hook">1,288 KB &rarr; 257 KB. Same text out.</p>
+    <h1>TurboQuant on Blackwell</h1>
+    <p class="subtitle">
+      A CUDA-native KV cache compression engine built with cuTile,
+      running on NVIDIA's Blackwell B200.
+    </p>
+  </section>
+
+  <!-- ── Stats ────────────────────────────────────── -->
+  <div class="stats-row">
+    <div class="stat">
+      <div class="number">5.02&times;</div>
+      <div class="label">Compression</div>
+    </div>
+    <div class="stat">
+      <div class="number">~0.985</div>
+      <div class="label">Cosine Similarity</div>
+    </div>
+    <div class="stat">
+      <div class="number">144.7</div>
+      <div class="label">tok/s on B200</div>
+    </div>
+    <div class="stat">
+      <div class="number">5</div>
+      <div class="label">Kernel Types</div>
+    </div>
+  </div>
+
+  <hr>
+
+  <!-- ── Overview ─────────────────────────────────── -->
+  <section>
+    <h2>What is this?</h2>
+    <p>
+      During LLM inference, the <strong>KV cache</strong> is the single biggest memory bottleneck.
+      At 8,000 tokens on a 3B-parameter model, you're looking at nearly 300 MB of cached keys and values.
+      The GPU spends over 90% of wall-clock time just waiting for that data to load from memory.
+    </p>
+    <p>
+      <strong>TurboQuant</strong> (Google, ICLR 2026) compresses the cache down to 3 bits per coordinate.
+      That's 5&times; less memory and 5&times; faster loads, with attention scores that stay <em>mathematically unbiased</em>.
+    </p>
+    <p>
+      I implemented TurboQuant as a set of custom CUDA kernels using <strong>NVIDIA cuTile</strong>
+      and ran it end-to-end on a <strong>Blackwell B200</strong> with Qwen 2.5-1.5B. The model generates
+      coherent text from a fully compressed KV cache with near-perfect fidelity.
+    </p>
+  </section>
+
+  <!-- ── Pipeline ─────────────────────────────────── -->
+  <section>
+    <h2>Pipeline</h2>
+
+    <div class="pipeline">
+      <div class="step" style="border-color: var(--green);">
+        <div class="icon">&lt;/&gt;</div>
+        <div class="step-label">Algorithm</div>
+        <div class="step-sub">TurboQuant paper</div>
+      </div>
+      <div class="arrow">&rarr;</div>
+      <div class="step" style="border-color: var(--blue);">
+        <div class="icon">&square;</div>
+        <div class="step-label">cuTile Kernels</div>
+        <div class="step-sub">5 kernel types</div>
+      </div>
+      <div class="arrow">&rarr;</div>
+      <div class="step" style="border-color: var(--purple);">
+        <div class="icon">LLM</div>
+        <div class="step-label">Qwen 2.5</div>
+        <div class="step-sub">B200 GPU</div>
+      </div>
+    </div>
+
+  </section>
+
+  <!-- ── Chapters ─────────────────────────────────── -->
+  <section>
+    <h2>Contents</h2>
+
+    <div class="card-grid">
+      <a href="algorithm.html" class="card accent-green" style="text-decoration:none;">
+        <h4>Chapter 1</h4>
+        <p style="color:var(--text-bright); font-weight:600; margin-bottom:6px;">The Algorithm</p>
+        <p style="font-size:0.88rem;">
+          Random rotation, Lloyd-Max quantization, and QJL bias correction.
+          How TurboQuant compresses KV cache to 3 bits with lossless attention.
+        </p>
+      </a>
+      <a href="kernels.html" class="card accent-blue" style="text-decoration:none;">
+        <h4>Chapter 2</h4>
+        <p style="color:var(--text-bright); font-weight:600; margin-bottom:6px;">Kernel Architecture</p>
+        <p style="font-size:0.88rem;">
+          Five cuTile kernel types, fused attention with on-chip decompression,
+          online softmax, and Blackwell-specific optimizations.
+        </p>
+      </a>
+      <a href="results.html" class="card accent-purple" style="text-decoration:none;">
+        <h4>Chapter 3</h4>
+        <p style="color:var(--text-bright); font-weight:600; margin-bottom:6px;">Results &amp; Benchmarks</p>
+        <p style="font-size:0.88rem;">
+          Compression ratios, attention quality metrics, latency benchmarks,
+          roofline analysis, and live generation from compressed cache.
+        </p>
+      </a>
+      <div class="card accent-green" style="border-left-color: var(--yellow);">
+        <h4>Try It Out</h4>
+        <p style="color:var(--text-bright); font-weight:600; margin-bottom:10px;">Links</p>
+        <p style="font-size:0.88rem; margin-bottom:8px;">
+          <a href="https://github.com/anirudhbv/turboquant-cutile" target="_blank" style="color:var(--green); font-weight:600;">GitHub Repo</a>
+          - Source code, setup instructions, and the full notebook.
+        </p>
+        <p style="font-size:0.88rem; margin-bottom:8px;">
+          <a href="#" target="_blank" style="color:var(--blue); font-weight:600;">Presentation Video</a>
+          - 5-minute walkthrough of the engine and results.
+        </p>
+        <p style="font-size:0.88rem; margin-bottom:0;">
+          <a href="https://arxiv.org/abs/2504.19874" target="_blank" style="color:var(--purple); font-weight:600;">TurboQuant Paper</a>
+          - Zandieh et al., arXiv 2504.19874 (ICLR 2026).
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── Generation demo ──────────────────────────── -->
+  <section>
+    <h2>Live Generation</h2>
+    <p>
+      Qwen 2.5-1.5B generating text from a TurboQuant-compressed KV cache on the B200.
+      The value cache is decompressed from 3-bit indices; the model produces coherent output
+      at 144.7 tok/s with a 5.02&times; compression ratio.
+    </p>
+    <figure>
+      <img src="screenshots/generation_complete.png" alt="TurboQuant generation from compressed KV cache">
+      <figcaption>60 tokens generated in 0.41s from compressed memory. 1,288 KB &rarr; 257 KB.</figcaption>
+    </figure>
+  </section>
+
+  <!-- ── Author ───────────────────────────────────── -->
+  <section>
+    <div class="author-card">
+      <img src="screenshots/anirudh.jpeg" alt="Anirudh Bharadwaj Vangara" style="width:56px; height:56px; border-radius:50%; object-fit:cover; flex-shrink:0;">
+      <div class="info">
+        <div class="name">Anirudh Bharadwaj Vangara</div>
+        <div class="meta">MLE Intern @ Shopify &middot; Computer Engineering @ University of Waterloo &middot; MLH Top 50</div>
+        <div style="margin-top:4px;">
+          <a class="email" href="mailto:ab2vanga@uwaterloo.ca">ab2vanga@uwaterloo.ca</a>
+          &middot;
+          <a href="http://linkedin.com/in/anirudhbvangara" target="_blank" style="font-size:0.82rem; color:var(--blue);">LinkedIn</a>
+          &middot;
+          <a href="https://x.com/anirudhbv_ce" target="_blank" style="font-size:0.82rem; color:var(--blue);">X / Twitter</a>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    TurboQuant on Blackwell &middot; Built with cuTile on NVIDIA B200 &middot;
+    Based on <a href="https://arxiv.org/abs/2504.19874">TurboQuant (ICLR 2026)</a>
+  </footer>
+
+</main>
+
+</body>
+</html>

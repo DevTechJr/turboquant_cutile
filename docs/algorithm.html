@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>The Algorithm — TurboQuant on Blackwell</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<nav>
+  <div class="nav-inner">
+    <a href="index.html" class="logo">TURBOQUANT cuTILE</a>
+    <ul class="nav-links">
+      <li><a href="index.html">Home</a></li>
+      <li><a href="algorithm.html" class="active">Algorithm</a></li>
+      <li><a href="kernels.html">Kernels</a></li>
+      <li><a href="results.html">Results</a></li>
+    </ul>
+  </div>
+</nav>
+
+<main>
+
+  <h1>Chapter 1: The Algorithm</h1>
+  <p style="color:var(--text-muted); margin-bottom: 40px;">
+    How TurboQuant compresses KV cache to 3 bits per coordinate with lossless attention scoring.
+  </p>
+
+  <!-- ── The KV Cache Problem ─────────────────────── -->
+  <section>
+    <h2>The KV Cache Problem</h2>
+    <p>
+      Every time a language model generates a token, it caches a <strong>key</strong> and a <strong>value</strong>
+      vector for that token across every single layer. The cache grows linearly with sequence length.
+      At 8,000 tokens on a 3-billion parameter model, that's almost 300 MB of KV cache.
+    </p>
+    <p>
+      During the decode phase (the part where the model actually generates its response),
+      the GPU isn't doing much math. It's sitting there waiting for cached data to load from
+      high-bandwidth memory. Over <strong>90% of wall-clock time</strong> is spent on memory reads.
+    </p>
+
+    <figure>
+      <video autoplay loop muted playsinline width="100%">
+        <source src="videos/A01_KVCache.mp4" type="video/mp4">
+      </video>
+      <figcaption>KV cache grows with each token. The GPU spends most of decode time waiting on memory.</figcaption>
+    </figure>
+
+    <div class="callout">
+      <strong>Two problems at once:</strong> The KV cache takes too much memory to store and too long to load.
+      TurboQuant compresses the cache down to 3 bits per coordinate, solving both.
+    </div>
+  </section>
+
+  <!-- ── Random Rotation ──────────────────────────── -->
+  <section>
+    <h2>Step 1: Random Rotation</h2>
+    <p>
+      Quantization is rounding. You snap each coordinate to the nearest bin. But raw key
+      vectors have outliers: a handful of coordinates with huge magnitudes, the rest clustered near zero.
+      A uniform grid wastes most of its bins covering the outliers. The dense middle gets poor resolution.
+    </p>
+    <p>
+      TurboQuant fixes this in two steps. First, each vector is <strong>normalized to a unit vector</strong>
+      (the original magnitude is stored separately as a scalar norm). Then it's multiplied by a
+      <strong>random orthogonal matrix &Pi;</strong>, which spreads energy evenly across all dimensions
+      without changing the vector's geometry (dot products are preserved since &Pi; is orthogonal).
+      After rotation, every coordinate follows the same predictable Gaussian distribution, and because
+      we know that distribution ahead of time, we can design the perfect quantizer for it.
+    </p>
+
+    <div class="formula">
+      k&#x0302; = &Pi; &middot; k &nbsp;&nbsp;&rarr;&nbsp;&nbsp; each coordinate ~ N(0, &sigma;&sup2;/d)
+    </div>
+
+    <figure>
+      <video autoplay loop muted playsinline width="100%">
+        <source src="videos/A02_Rotation.mp4" type="video/mp4">
+      </video>
+      <figcaption>Before rotation: outliers dominate. After: energy spreads into a uniform bell curve.</figcaption>
+    </figure>
+  </section>
+
+  <!-- ── Lloyd-Max Quantization ───────────────────── -->
+  <section>
+    <h2>Step 2: Lloyd-Max Quantization</h2>
+    <p>
+      Now that every coordinate follows the same Gaussian, we can use <strong>Lloyd-Max</strong>
+      optimal scalar quantization. It places centroids along the bell curve: more where the data
+      is dense, fewer at the tails. This minimizes mean squared error for the known distribution.
+    </p>
+    <p>
+      We precompute the codebook once offline using a feedback loop: assign coordinates to nearest centroids,
+      recompute centroids as conditional means, repeat. The result is stored as a small lookup table.
+    </p>
+
+    <div class="card-grid">
+      <div class="card accent-green">
+        <h4>Values</h4>
+        <p>
+          <strong>3 bits &rarr; 8 centroids.</strong>
+          All bits go to Lloyd-Max. Values aren't part of the scoring dot product,
+          so no bias correction needed.
+        </p>
+      </div>
+      <div class="card accent-blue">
+        <h4>Keys</h4>
+        <p>
+          <strong>2 bits &rarr; 4 centroids</strong> for Lloyd-Max,
+          plus <strong>1 bit</strong> reserved for QJL bias correction (see below).
+          3 total bits per coordinate.
+        </p>
+      </div>
+    </div>
+
+    <figure>
+      <video autoplay loop muted playsinline width="100%">
+        <source src="videos/A03_LloydMax.mp4" type="video/mp4">
+      </video>
+      <figcaption>Lloyd-Max centroids iteratively converge to optimal positions along the Gaussian.</figcaption>
+    </figure>
+  </section>
+
+  <!-- ── QJL Bias Correction ──────────────────────── -->
+  <section>
+    <h2>Step 3: QJL Bias Correction</h2>
+    <p>
+      Here's the catch. Reconstructed vectors don't come back perfectly. There's a small
+      reconstruction loss that systematically shrinks every vector toward zero, which means
+      every attention score ends up a little too small.
+    </p>
+    <p>
+      Softmax <em>exponentiates</em> those scores, so even a small systematic bias gets amplified
+      into a completely warped attention distribution.
+    </p>
+    <p>
+      TurboQuant fixes this with <strong>QJL</strong> (Quantized Johnson-Lindenstrauss). Take the
+      quantization residual, project it through a random matrix <strong>S</strong>, and keep just the
+      <em>sign</em> of each coordinate. Positive or negative. One bit per dimension.
+    </p>
+    <p>
+      At decode time, the stored signs compute a correction term that provably cancels out the bias:
+    </p>
+
+    <div class="formula">
+      score(q, k) &asymp; &langle;q, k&#x0302;<sub>mse</sub>&rangle; + &Vert;r&Vert; &middot; &radic;(&pi;/2) / m &middot; (S @ q) &middot; sign(S @ residual)
+    </div>
+
+    <div class="callout blue">
+      <strong>Why not QJL on values?</strong> Values are linearly combined with softmax weights.
+      There's no dot product to be biased. Reconstruction error gets averaged across the weighted sum
+      instead of being amplified through an exponential, so all 3 bits go to Lloyd-Max for better MSE.
+    </div>
+
+    <figure>
+      <video autoplay loop muted playsinline width="100%">
+        <source src="videos/A04_OptionA.mp4" type="video/mp4">
+      </video>
+      <figcaption>Quantization shrinks scores (red). QJL correction restores the unbiased estimate (green).</figcaption>
+    </figure>
+  </section>
+
+  <!-- ── Bit Budget Summary ───────────────────────── -->
+  <section>
+    <h2>Bit Budget</h2>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Component</th>
+          <th>Lloyd-Max</th>
+          <th>QJL</th>
+          <th>Total</th>
+          <th>Centroids</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Keys</strong></td>
+          <td>2 bits</td>
+          <td>1 bit</td>
+          <td style="color:var(--green); font-weight:700;">3 bits</td>
+          <td>4 (Lloyd-Max)</td>
+        </tr>
+        <tr>
+          <td><strong>Values</strong></td>
+          <td>3 bits</td>
+          <td>-</td>
+          <td style="color:var(--green); font-weight:700;">3 bits</td>
+          <td>8 (Lloyd-Max)</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <p>
+      At 3 bits per coordinate for both keys and values, the total KV cache compresses to roughly
+      <strong>1/5 of FP16 size</strong>, while attention scores remain mathematically unbiased.
+    </p>
+  </section>
+
+  <!-- ── Chapter Nav ──────────────────────────────── -->
+  <div class="chapter-nav">
+    <a href="index.html">&larr; Home</a>
+    <a href="kernels.html">Chapter 2: Kernels &rarr;</a>
+  </div>
+
+  <section>
+    <div class="author-card">
+      <img src="screenshots/anirudh.jpeg" alt="Anirudh Bharadwaj Vangara" style="width:56px; height:56px; border-radius:50%; object-fit:cover; flex-shrink:0;">
+      <div class="info">
+        <div class="name">Anirudh Bharadwaj Vangara</div>
+        <div class="meta">MLE Intern @ Shopify &middot; Computer Engineering @ University of Waterloo &middot; MLH Top 50</div>
+        <div style="margin-top:4px;">
+          <a class="email" href="mailto:ab2vanga@uwaterloo.ca">ab2vanga@uwaterloo.ca</a>
+          &middot;
+          <a href="http://linkedin.com/in/anirudhbvangara" target="_blank" style="font-size:0.82rem; color:var(--blue);">LinkedIn</a>
+          &middot;
+          <a href="https://x.com/anirudhbv_ce" target="_blank" style="font-size:0.82rem; color:var(--blue);">X / Twitter</a>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    TurboQuant on Blackwell &middot; Built with cuTile on NVIDIA B200 &middot;
+    Based on <a href="https://arxiv.org/abs/2504.19874">TurboQuant (ICLR 2026)</a>
+  </footer>
+
+</main>
+
+</body>
+</html>
