@@ -10,8 +10,8 @@
   --text-bright:  #ededed;
   --text-muted:   #71717a;
   --text-dim:     #52525b;
-  --green:        #4ade80;
-  --green-dim:    rgba(74, 222, 128, 0.1);
+  --green:        #76b900;
+  --green-dim:    rgba(118, 185, 0, 0.15);
   --blue:         #60a5fa;
   --blue-dim:     rgba(96, 165, 250, 0.1);
   --purple:       #c084fc;
@@ -43,7 +43,7 @@ body {
   line-height: 1.7;
   color: var(--text);
   background: var(--bg);
-  background-image: radial-gradient(circle at 50% 0%, rgba(74,222,128,0.03) 0%, transparent 60%);
+  background-image: radial-gradient(circle at 50% 0%, rgba(118,185,0,0.06) 0%, transparent 60%);
   animation: fadeIn 0.8s ease-out forwards;
 }
 
