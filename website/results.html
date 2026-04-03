@@ -247,9 +247,7 @@
     <div class="card accent-purple">
       <h4>Larger Models and MoE</h4>
       <p>
-        Qwen 2.5-1.5B was the proving ground. The real payoff is on larger models where KV cache
-        dominates memory. MoE architectures already stress memory budgets with expert weights,
-        so 5x cache compression would free significant capacity for longer contexts or higher batch sizes.
+        The initial implementation targets Qwen 2.5-1.5B, but the core memory savings inherently scale with model depth. MoE architectures are notoriously memory-bound due to expert weights; pairing them with a native 3-bit KV cache frees up massive VRAM headroom for drastically higher batch sizes and extended sequence lengths.
       </p>
     </div>
   </section>
